@@ -9287,7 +9287,7 @@ function applyAuthState(){
    GOOGLE LOGIN + DEVICE BIOMETRIC / PASSKEY
 ========================================================= */
 
-const GOOGLE_CLIENT_ID="382197017396-uhuc606u2ilb9ema3r1k1g8u7hog7a5f.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID="685455478511-lvt2q9humsse63ngt0vlgqgn1mtpt025.apps.googleusercontent.com";
 /* Only these two Google accounts use the special biometric/passkey gate.
    Every other valid Google account follows the normal Google-account flow. */
 const SPECIAL_BIOMETRIC_GOOGLE_EMAILS=[
@@ -9695,6 +9695,11 @@ function initSupabaseClient(){
 }
 
 let selectedFFChatUser=null;
+
+function getEncodedChatRoomKey(raw){
+    raw=String(raw||"");
+    return getEncodedChatRoomKey(raw);
+}
 
 function getChatRoomKey(){
     let raw="friendship-default";
@@ -10228,67 +10233,73 @@ async function sendChatMessage(){
 async function deliverChatMessage(text){
     const statusEl=document.getElementById("chatHeaderStatus");
 
-    if(initSupabaseClient() && currentAccount && currentAccount.googleEmail){
-        try{
-            const {data:{session},error:sessionError}=await supabaseClient.auth.getSession();
-
-            if(sessionError || !session){
-                throw new Error("Supabase authentication session is missing.");
-            }
-
-            const senderUserId=String(session.user.id||"");
-
-            /* If the legacy floating chat is used without a selected contact,
-               send it to the shared GENERAL room instead of silently failing. */
-            const activeChatUser=selectedFFChatUser || {isGeneral:true,user_id:"general",email:"",display_name:"GENERAL"};
-            const recipientUserId=activeChatUser && !activeChatUser.isGeneral
-                ? String(activeChatUser.user_id||"")
-                : null;
-            const isGeneral=!!activeChatUser.isGeneral;
-
-            if(!senderUserId){
-                throw new Error("Supabase user ID is missing.");
-            }
-            if(!isGeneral && !recipientUserId){
-                throw new Error("Chat recipient is not available yet. Please reopen the conversation.");
-            }
-
-            const {data,error}=await supabaseClient
-                .from("chat_messages")
-                .insert({
-                    room_key:getChatRoomKey(),
-                    sender_email:getChatSenderEmail(),
-                    sender_name:getChatSenderName(),
-                    body:text,
-                    sender_user_id:senderUserId,
-                    recipient_user_id:recipientUserId,
-                    is_general:isGeneral
-                })
-                .select("id,room_key,sender_email,sender_name,body,created_at,sender_user_id,recipient_user_id,is_general")
-                .single();
-
-            if(error){
-                console.error("Supabase chat INSERT error:",error);
-                throw new Error(error.message || error.details || "Message could not be sent.");
-            }
-
-            chatBackendAvailable=true;
-            if(statusEl) statusEl.textContent="Connected · Live";
-
-            /* The Realtime subscription will receive this row.
-               Avoid adding a second local copy. */
-            return true;
-        }catch(error){
-            console.error("Supabase chat send failed:",error);
-            chatBackendAvailable=false;
-            if(statusEl) statusEl.textContent="Send failed · " + String(error?.message||"Supabase unavailable").slice(0,80);
-            return false;
-        }
+    if(!initSupabaseClient() || !currentAccount || !currentAccount.googleEmail){
+        if(statusEl) statusEl.textContent="Live chat unavailable — connect Supabase";
+        return false;
     }
 
-    /* No local fallback: chat requires an authenticated Supabase session. */
-    if(statusEl) statusEl.textContent="Live chat unavailable — connect Supabase";
-    return false;
+    try{
+        const {data:{session},error:sessionError}=await supabaseClient.auth.getSession();
+        if(sessionError || !session?.user?.id){
+            throw new Error("Supabase authentication session is missing.");
+        }
+
+        const senderUserId=String(session.user.id);
+        const activeChatUser=selectedFFChatUser || {
+            isGeneral:true,
+            user_id:"general",
+            email:"",
+            display_name:"GENERAL"
+        };
+
+        /* General is ALWAYS one shared room. A stale contact object must
+           never redirect a General message into a private room. */
+        const isGeneral=!!activeChatUser.isGeneral;
+        const roomKey=isGeneral
+            ? getEncodedChatRoomKey("friendship::general")
+            : getChatRoomKey();
+
+        const recipientUserId=isGeneral
+            ? null
+            : String(activeChatUser.user_id||"");
+
+        if(!isGeneral && !recipientUserId){
+            throw new Error("Chat recipient is not available yet. Please reopen the conversation.");
+        }
+
+        const payload={
+            room_key:roomKey,
+            sender_email:getChatSenderEmail(),
+            sender_name:getChatSenderName(),
+            body:String(text||""),
+            sender_user_id:senderUserId,
+            recipient_user_id:recipientUserId,
+            is_general:isGeneral
+        };
+
+        if(!payload.body.trim()) return false;
+
+        /* The INSERT itself is the send operation. Do not require a
+           post-insert SELECT response, which adds an unnecessary RLS
+           dependency and can make a successful send look failed. */
+        const {error}=await supabaseClient
+            .from("chat_messages")
+            .insert(payload);
+
+        if(error){
+            console.error("Supabase chat INSERT error:",error);
+            throw new Error(error.message || error.details || "Message could not be sent.");
+        }
+
+        chatBackendAvailable=true;
+        if(statusEl) statusEl.textContent="Connected · Live";
+        return true;
+    }catch(error){
+        console.error("Supabase chat send failed:",error);
+        chatBackendAvailable=false;
+        if(statusEl) statusEl.textContent="Send failed · " + String(error?.message||"Supabase unavailable").slice(0,100);
+        return false;
+    }
 }
 
 
