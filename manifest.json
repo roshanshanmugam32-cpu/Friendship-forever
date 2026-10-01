@@ -1,0 +1,25 @@
+{
+  "name": "Friendship Forever",
+  "short_name": "Friendship Forever",
+  "description": "FRIENDSHIP FOREVER — a private friendship memory space.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#070711",
+  "theme_color": "#080812",
+  "icons": [
+    {
+      "src": "./logo.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
