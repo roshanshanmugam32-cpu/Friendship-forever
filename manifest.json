@@ -1,7 +1,7 @@
 {
-  "name": "Friendship Forever",
-  "short_name": "Friendship Forever",
-  "description": "FRIENDSHIP FOREVER — a private friendship memory space.",
+  "name": "Eternal",
+  "short_name": "Eternal",
+  "description": "Eternal \u2014 Friendship Forever",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -10,14 +10,20 @@
   "theme_color": "#080812",
   "icons": [
     {
-      "src": "./logo.png",
+      "src": "./eternal-icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "./logo.png",
+      "src": "./eternal-icon-512.png",
       "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "./eternal-icon-1024.png",
+      "sizes": "1024x1024",
       "type": "image/png",
       "purpose": "any maskable"
     }
