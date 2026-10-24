@@ -1,31 +1,27 @@
 {
   "name": "Eternal",
   "short_name": "Eternal",
-  "description": "Eternal \u2014 Friendship Forever",
+  "description": "Eternal — a place for school friends to remember their school days",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",
   "background_color": "#070711",
-  "theme_color": "#080812",
+  "theme_color": "#050c24",
   "icons": [
     {
       "src": "./eternal-icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
       "src": "./eternal-icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
-    },
-    {
-      "src": "./eternal-icon-1024.png",
-      "sizes": "1024x1024",
-      "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
-  ]
+  ],
+  "id": "./",
+  "lang": "en"
 }
