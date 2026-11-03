@@ -19085,6 +19085,8 @@ html.ffx-rm *,html.ffx-rm *::before,html.ffx-rm *::after{animation-duration:.01m
   function esc(v){return String(v??"").replace(/[&<>'"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c]));}
   function fmtTime(s){if(!isFinite(s)||s<0)s=0;const m=Math.floor(s/60),ss=Math.floor(s%60);return m+":"+String(ss).padStart(2,"0");}
   function toast(t){if(typeof showFFSwipeHint==="function")showFFSwipeHint(t);else console.log(t);}
+  /* Write text only when it really changed, so unchanged buttons/labels are never re-painted (no blinking glyphs). */
+  function setTxt(el,v){if(el&&el.textContent!==v)el.textContent=v;}
 
   async function ensureSb(){
     /* supabaseClient is declared with `let` in the main script, so it is NOT a window property; read the shared global binding. */
@@ -19136,8 +19138,22 @@ html.ffx-rm *,html.ffx-rm *::before,html.ffx-rm *::after{animation-duration:.01m
       analyser.fftSize=64;
       srcNode.connect(analyser);
       analyser.connect(audioCtx.destination);
+      audioCtx.onstatechange=resumeCtx;
     }catch(e){/* visualizer optional; playback still works without it */}
   }
+  /* The player is routed through an AudioContext for the visualizer. Android can suspend that context while a
+     share sheet / another app is in front, which silences the song even though the <audio> element still says
+     "playing". Resume it whenever playback is supposed to be running. */
+  function resumeCtx(){
+    try{
+      if(!audioCtx||audioCtx.state==="running"||audioCtx.state==="closed")return;
+      const a=$("ffGlobalAudio");if(a&&a.paused)return;
+      const pr=audioCtx.resume();if(pr&&pr.catch)pr.catch(()=>{});
+    }catch(e){}
+  }
+  document.addEventListener("visibilitychange",function(){if(document.visibilityState==="visible")resumeCtx();});
+  window.addEventListener("focus",resumeCtx);
+  window.addEventListener("pageshow",resumeCtx);
   let vizBars=null,vizLast=0;
   function drawViz(ts){
     vizRAF=null;
@@ -19570,10 +19586,10 @@ html.ffx-rm *,html.ffx-rm *::before,html.ffx-rm *::after{animation-duration:.01m
   function updatePlayState(playing){
     const fab=$("ffMusicFab");if(fab)fab.classList.toggle("playing",playing);
     document.querySelectorAll(".ffmp-track,.ffmini-track").forEach(el=>el.classList.toggle("playing",playing&&el.dataset.trackId===currentTrackId()));
-    const ppBtn=$("ffMpPlayPause");if(ppBtn)ppBtn.textContent=playing?"⏸":"▶";
+    setTxt($("ffMpPlayPause"),playing?"⏸":"▶");
     const mpEl=$("ffMusicPanel");if(mpEl)mpEl.classList.toggle("is-playing",playing);
-    document.querySelectorAll(".ffmp-track-play").forEach(b=>{b.textContent=(playing&&b.dataset.play===currentTrackId())?"⏸":"▶";});
-    if(playing){ensureViz();try{audioCtx&&audioCtx.resume();}catch(e){}startViz();}
+    document.querySelectorAll(".ffmp-track-play").forEach(b=>{setTxt(b,(playing&&b.dataset.play===currentTrackId())?"⏸":"▶");});
+    if(playing){ensureViz();resumeCtx();startViz();}
     else stopViz();
   }
   const BGM_KEY="ff_bgm_track_v1";
@@ -19607,12 +19623,19 @@ html.ffx-rm *,html.ffx-rm *::before,html.ffx-rm *::after{animation-duration:.01m
   function currentTrackId(){return (queue[queueIndex]&&queue[queueIndex].id)||"";}
   function currentTrack(){return queue[queueIndex]||null;}
   function onTimeUpdate(){
+    const mp=$("ffMusicPanel");
+    if(!mp||!mp.classList.contains("show"))return; /* nothing visible to update while the panel is closed; refreshed on open */
     const a=ensureAudioEl();
     const seek=$("ffMpSeek");
-    if(seek&&!seek.dataset.dragging){seek.max=isFinite(a.duration)?Math.floor(a.duration):0;seek.value=Math.floor(a.currentTime||0);seek.style.setProperty("--p",(a.duration?(a.currentTime/a.duration*100):0)+"%");}
-    const cur=$("ffMpCurTime"),dur=$("ffMpDurTime");
-    if(cur)cur.textContent=fmtTime(a.currentTime);
-    if(dur)dur.textContent=fmtTime(a.duration);
+    if(seek&&!seek.dataset.dragging){
+      const mx=isFinite(a.duration)?Math.floor(a.duration):0,val=Math.floor(a.currentTime||0);
+      if(+seek.max!==mx)seek.max=mx;
+      if(+seek.value!==val)seek.value=val;
+      const pct=(a.duration?(a.currentTime/a.duration*100):0).toFixed(1)+"%";
+      if(seek.__pct!==pct){seek.__pct=pct;seek.style.setProperty("--p",pct);}
+    }
+    setTxt($("ffMpCurTime"),fmtTime(a.currentTime));
+    setTxt($("ffMpDurTime"),fmtTime(a.duration));
   }
   async function playTrackById(id,fromList){
     const list=fromList||tracks;
@@ -19952,8 +19975,8 @@ html.ffx-rm *,html.ffx-rm *::before,html.ffx-rm *::after{animation-duration:.01m
   function updateMiniText(){
     const t=currentTrack();
     const txt=$("ffMiniNowText"),pp=$("ffMiniPlayPause");
-    if(txt)txt.textContent=t?((t.title||"Untitled")+(ensureAudioEl().paused?" (paused)":" — playing")):"Nothing playing";
-    if(pp)pp.textContent=ensureAudioEl().paused?"▶":"⏸";
+    setTxt(txt,t?((t.title||"Untitled")+(ensureAudioEl().paused?" (paused)":" — playing")):"Nothing playing");
+    setTxt(pp,ensureAudioEl().paused?"▶":"⏸");
   }
 
   function musicDataSig(){
@@ -19970,6 +19993,7 @@ html.ffx-rm *,html.ffx-rm *::before,html.ffx-rm *::after{animation-duration:.01m
     const alreadyDrawn=!!($("ffMpTracks")&&$("ffMpTracks").querySelector(".ffmp-track"));
     if(hadData&&!alreadyDrawn){renderPlaylists();renderNowPlaying();renderMini();}
     $("ffMusicPanel").classList.add("show");
+    onTimeUpdate();updatePlayState(!ensureAudioEl().paused);
     startViz();
     if(musicOpenBusy)return musicOpenBusy; /* repeated taps while loading reuse the same fetch */
     const before=musicDataSig();
@@ -26202,15 +26226,56 @@ function peopleList(host,ppl,sel,q,onToggle){
 }
 
 /* ---------------- Share / visibility dialog (owner only) ---------------- */
+/* One share dialog at a time: the dialog is built after several network awaits, so rapid taps used to stack
+   several dialogs. SHARING is set on the first tap and cleared when the dialog closes (or fails to open). */
+var SHARING=0;
 async function openShare(kind,item,done){
+  if(SHARING&&Date.now()-SHARING<20000)return;
+  SHARING=Date.now();var opened=false;
+  try{opened=await openShareInner(kind,item,done)}catch(e){hint(friendly(e))}
+  if(!opened)SHARING=0;
+}
+/* Native share sheet (Web Share API) with clipboard / prompt fallbacks. Never touches the player. */
+var LINKBUSY=false,LASTHINT={t:"",at:0};
+function hintOnce(t){var n=Date.now();if(LASTHINT.t===t&&n-LASTHINT.at<2500)return;LASTHINT={t:t,at:n};hint(t)}
+function appLink(){try{return String(location.href).split("#")[0].split("?")[0]}catch(e){return""}}
+async function copyText(text){
+  try{if(navigator.clipboard&&navigator.clipboard.writeText&&window.isSecureContext){await navigator.clipboard.writeText(text);return true}}catch(e){}
+  try{
+    var ta=document.createElement("textarea");ta.value=text;ta.setAttribute("readonly","");
+    ta.style.cssText="position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+    document.body.appendChild(ta);ta.focus();ta.select();try{ta.setSelectionRange(0,text.length)}catch(e){}
+    var ok=!!(document.execCommand&&document.execCommand("copy"));ta.remove();return ok;
+  }catch(e){return false}
+}
+async function shareLink(item,btn){
+  if(LINKBUSY)return;LINKBUSY=true;if(btn)btn.disabled=true;
+  var title=String((item&&item.title)||"a song"),url=appLink(),text="🎵 "+title+" — listen on ETERNAL";
+  try{
+    var data={title:title,text:text,url:url};
+    var canNative=typeof navigator.share==="function";
+    if(canNative&&typeof navigator.canShare==="function"){try{canNative=!!navigator.canShare(data)}catch(e){canNative=false}}
+    if(canNative){
+      try{await navigator.share(data);hintOnce("Shared");return}
+      catch(e){
+        if(e&&e.name==="AbortError")return; /* user closed the share sheet: not an error, say nothing */
+        /* NotAllowedError / unsupported target / anything else: fall through to copying the link */
+      }
+    }
+    if(await copyText(text+"\n"+url))hintOnce("Link copied");
+    else{try{window.prompt("Copy this link:",url)}catch(e){hintOnce("Couldn't copy the link")}}
+  }finally{LINKBUSY=false;if(btn)btn.disabled=false}
+}
+async function openShareInner(kind,item,done){
   var c=sb(),m=await me();
-  if(!c||!m.id){hint("Sign in to share");return}
-  if(item.owner_id!==m.id){hint("Only the owner can change sharing");return}
+  if(!c||!m.id){hint("Sign in to share");return false}
+  if(item.owner_id!==m.id){hint("Only the owner can change sharing");return false}
   var ppl=[],cur=[];
-  try{ppl=await people(true);cur=(await sharesFor(kind))[item.id]||[]}catch(e){hint(friendly(e));return}
+  try{ppl=await people(true);cur=(await sharesFor(kind))[item.id]||[]}catch(e){hint(friendly(e));return false}
   var curVis=item.visibility||"public";
   var st={mode:curVis==="public"?"everyone":(curVis==="shared"||cur.length?"people":"private"),sel:new Set(cur.map(function(x){return x.user})),q:""};
   var M=modal("ffm-share"),box=M.box;
+  M.onclose=function(){SHARING=0};
   var byId={};ppl.forEach(function(p){byId[p.id]=p});
   function draw(){
     box.innerHTML='<div class="ffm-mh"><div class="ffm-mt"><span class="ffm-mi">'+K[kind].icon+'</span><div><b>Share</b><small>'+esc(item.title||"Untitled")+'</small></div></div><button type="button" class="ffm-x" aria-label="Close">✕</button></div>'+
@@ -26252,6 +26317,12 @@ async function openShare(kind,item,done){
       });
       mb.appendChild(cs);
     }
+    if(kind==="music"){
+      var lr=document.createElement("div");lr.className="ffm-sharelink";
+      lr.innerHTML='<span>Send a link to ETERNAL with this song</span><button type="button" data-act="link">📤 Share link</button>';
+      box.insertBefore(lr,box.querySelector(".ffm-mf"));
+      lr.querySelector("button").onclick=function(){shareLink(item,this)};
+    }
     upd();
   }
   function upd(){var s=box.querySelector('[data-act="save"]');if(!s)return;s.disabled=(st.mode==="people"&&st.sel.size===0);s.textContent=st.mode==="people"&&st.sel.size?"Share with "+st.sel.size:"Save"}
@@ -26265,6 +26336,7 @@ async function openShare(kind,item,done){
     item.visibility=res.vis;hint(res.vis==="private"?"Now private":res.vis==="public"?"Shared with everyone":"Sharing saved");
     done&&done();M.close();
   });
+  return true;
 }
 /* the one place that changes visibility + share rows */
 async function applySharing(kind,id,cur,mode,ids,prevVis){
@@ -27662,6 +27734,25 @@ window.addEventListener("load",function(){setTimeout(tune,400)},{once:true});
   @media (prefers-reduced-motion: reduce) {
     #ffMusicPanel *, #ffMusicFab, #ffMusicMini { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
+  /* Side drawer (Explore) entries, including Music: each card ran six stacked infinite animations
+     (background sweep, box-shadow pulse, float, rotating ring, light sweep, text gradient) -> constant
+     repaint that shows up as blinking. Keep the one-time entrance, drop the endless loops. */
+  body #pageMenu.page-menu button.ff-vault-entry,
+  body #pageMenu.page-menu button.ff-vault-entry > span,
+  body #pageMenu.page-menu button.ff-vault-entry > span::before,
+  body #pageMenu.page-menu button.ff-vault-entry strong,
+  body #pageMenu.page-menu button.ff-vault-entry .ff-vault-glow,
+  body #pageMenu.page-menu button.ff-vault-entry .ff-vault-tag { animation: none !important; }
+  body #pageMenu.page-menu.open button.ff-vault-entry { animation: ffPmIn .55s cubic-bezier(.22,1,.36,1) backwards !important; animation-delay: .2s !important; }
+  body #pageMenu.page-menu button.ff-vault-entry .ff-vault-glow { opacity: 0; }
+  /* The home page behind the opaque Music panel keeps its ambient layers still while Music is open. */
+  body:has(#ffMusicPanel.show)::before, body:has(#ffMusicPanel.show)::after { animation-play-state: paused !important; }
+  /* Share dialog: no blur of the live player behind it (heavy repaint on phones) */
+  body:has(#ffMusicPanel.show) .ffm-ov { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(2,6,22,.82); }
+  .ffm-sharelink { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 0 0; padding: 10px 12px; border-radius: 14px; border: 1px solid rgba(150,195,255,.24); background: rgba(255,255,255,.05); }
+  .ffm-sharelink span { font-size: 12.5px; line-height: 1.4; color: rgba(224,238,255,.74); min-width: 0; }
+  .ffm-sharelink button { flex: 0 0 auto; min-height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid rgba(160,205,255,.4); background: linear-gradient(135deg,rgba(60,130,255,.55),rgba(70,205,255,.35)); color: #fff; font: inherit; font-size: 12.5px; font-weight: 800; cursor: pointer; }
+  .ffm-sharelink button:disabled { opacity: .6; cursor: default; }
 </style>
 <script id="ff-music-load-error-patch">
 (function () {
@@ -27701,6 +27792,278 @@ window.addEventListener("load",function(){setTimeout(tune,400)},{once:true});
   }
   /* The original music module is declared earlier in this single-file page. */
   setTimeout(patchMusicOpen, 0);
+})();
+</script>
+<style id="ff-offline-hybrid-css">
+#ffNetStatus{position:fixed;left:10px;bottom:calc(env(safe-area-inset-bottom,0px) + 96px);z-index:9000;display:flex;align-items:center;gap:6px;padding:4px 10px 4px 8px;border-radius:999px;font:700 11px/1.2 Outfit,system-ui,sans-serif;letter-spacing:.02em;color:#e8f0ff;background:rgba(8,12,30,.78);border:1px solid rgba(255,255,255,.14);pointer-events:none;opacity:.6;transition:opacity .25s;max-width:70vw;white-space:nowrap}
+#ffNetStatus i{width:8px;height:8px;border-radius:50%;background:#35d07f;box-shadow:0 0 8px rgba(53,208,127,.6);flex:none}
+#ffNetStatus.is-offline{opacity:1;border-color:rgba(255,77,94,.5)}
+#ffNetStatus.is-offline i{background:#ff4d5e;box-shadow:0 0 8px rgba(255,77,94,.6)}
+#ffNetStatus.is-busy{opacity:1}
+.ff-pending{opacity:.82;outline:1px dashed rgba(255,255,255,.35);outline-offset:-1px}
+.ff-pending .ff-pending-text{white-space:pre-wrap;word-break:break-word}
+.ff-pending .ff-pending-status{margin-top:5px;font-size:11px;font-weight:700;opacity:.85}
+.ff-pending.is-failed .ff-pending-status{color:#ff8a96}
+.ff-pending .ff-pending-actions{display:flex;gap:8px;margin-top:6px}
+.ff-pending .ff-pending-actions button{font:700 11px Outfit,system-ui,sans-serif;padding:3px 10px;border-radius:999px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.08);color:inherit;cursor:pointer}
+@media (prefers-reduced-motion:reduce){#ffNetStatus{transition:none}}
+</style>
+<script id="ff-offline-hybrid">
+(function () {
+  "use strict";
+  /* ETERNAL — Offline + Online hybrid layer.
+     - Connectivity indicator (online/offline events, no reloads).
+     - Offline outbox for chat messages (IndexedDB), shown as "Pending" until Supabase confirms the insert.
+     - Automatic retry/resync when the connection returns.
+     Reuses the existing supabaseClient / deliverChatMessage / renderChatMessages. No credentials in here. */
+  var DB_NAME = "ff_outbox_v1", STORE = "outbox";
+  var MAX_ATTEMPTS = 5;
+  var dbp = null, flushing = false, retryTimer = null, retryStep = 0, cache = [];
+
+  /* ---------- tiny IndexedDB helper ---------- */
+  function openDb() {
+    if (dbp) return dbp;
+    dbp = new Promise(function (res, rej) {
+      if (!window.indexedDB) return rej(new Error("IndexedDB unavailable"));
+      var r = indexedDB.open(DB_NAME, 1);
+      r.onupgradeneeded = function () { if (!r.result.objectStoreNames.contains(STORE)) r.result.createObjectStore(STORE, { keyPath: "id" }); };
+      r.onsuccess = function () { res(r.result); };
+      r.onerror = function () { dbp = null; rej(r.error); };
+    });
+    return dbp;
+  }
+  function tx(mode, fn) {
+    return openDb().then(function (db) {
+      return new Promise(function (res, rej) {
+        var t = db.transaction(STORE, mode), out = fn(t.objectStore(STORE));
+        t.oncomplete = function () { res(out && out.result !== undefined ? out.result : undefined); };
+        t.onerror = t.onabort = function () { rej(t.error); };
+      });
+    });
+  }
+  function putItem(item) { return tx("readwrite", function (s) { return s.put(item); }); }
+  function delItem(id) { return tx("readwrite", function (s) { return s.delete(id); }); }
+  function allItems() { return tx("readonly", function (s) { return s.getAll(); }).then(function (r) { return (r || []).sort(function (a, b) { return a.createdAt < b.createdAt ? -1 : 1; }); }); }
+  function refreshCache() { return allItems().then(function (r) { cache = r; paint(); return r; }).catch(function () { return cache; }); }
+
+  /* ---------- helpers on top of existing app state ---------- */
+  function uuid() {
+    try { if (crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
+    var b = new Uint8Array(16); crypto.getRandomValues(b); b[6] = (b[6] & 15) | 64; b[8] = (b[8] & 63) | 128;
+    var h = Array.prototype.map.call(b, function (x) { return ("0" + x.toString(16)).slice(-2); }).join("");
+    return h.slice(0, 8) + "-" + h.slice(8, 12) + "-" + h.slice(12, 16) + "-" + h.slice(16, 20) + "-" + h.slice(20);
+  }
+  function sb() { try { if (typeof initSupabaseClient === "function") initSupabaseClient(); } catch (e) {} return (typeof supabaseClient !== "undefined" && supabaseClient) || null; }
+  function owner() { try { return (typeof getChatSenderEmail === "function" && getChatSenderEmail()) || ""; } catch (e) { return ""; } }
+  function hasAccount() { try { return !!(currentAccount && currentAccount.googleEmail); } catch (e) { return false; } }
+  function roomKey() { try { return getChatRoomKey(); } catch (e) { return ""; } }
+  function isOffline() { return navigator.onLine === false; }
+  function mine() { var o = owner(); return o ? cache.filter(function (i) { return i.owner === o; }) : []; }
+  function netErr(e) { var m = String((e && (e.message || e.details)) || e || ""); return /failed to fetch|networkerror|network request|load failed|fetch|timeout|timed out|abort|offline|ERR_INTERNET/i.test(m); }
+
+  /* ---------- status indicator ---------- */
+  var pill = null, doneTimer = null, doneMsg = "";
+  function ensurePill() {
+    if (pill) return pill;
+    pill = document.createElement("div");
+    pill.id = "ffNetStatus"; pill.setAttribute("role", "status"); pill.setAttribute("aria-live", "polite");
+    pill.innerHTML = "<i></i><span></span>";
+    (document.body || document.documentElement).appendChild(pill);
+    return pill;
+  }
+  function paint() {
+    var p = ensurePill(), n = mine().length, off = isOffline();
+    var txt = off ? "Offline" : "Online";
+    if (n) txt += off ? " · " + n + " pending" : (flushing ? " · sending " + n + "…" : " · " + n + " pending");
+    else if (doneMsg) txt += " · " + doneMsg;
+    p.className = off ? "is-offline" : ((n || doneMsg) ? "is-busy" : "");
+    p.querySelector("span").textContent = txt;
+    renderPending();
+  }
+  function flash(msg) { doneMsg = msg; paint(); clearTimeout(doneTimer); doneTimer = setTimeout(function () { doneMsg = ""; paint(); }, 3500); }
+
+  /* ---------- pending bubbles inside the open conversation ---------- */
+  function label(body) {
+    var b = String(body || "");
+    if (b.indexOf("__FF_IMAGE__") === 0) return "📷 Image";
+    if (b.indexOf("__FF_VIDEO__") === 0) return "🎬 Video";
+    if (b.indexOf("__FF_AUDIO__") === 0) return "🎵 Audio";
+    if (b.indexOf("__FF_VOICE__") === 0) return "🎤 Voice message";
+    if (b.indexOf("__FF_FILE__") === 0) return "📎 File";
+    return b;
+  }
+  function statusText(i) {
+    if (i.status === "failed") return "⚠ Not sent · the server rejected it";
+    if (isOffline()) return "🕒 Pending · waiting for internet";
+    return flushing ? "⏳ Sending…" : "🕒 Pending · will send automatically";
+  }
+  function container() { return document.getElementById("ffConversationMessages") || document.getElementById("chatMessages"); }
+  function renderPending() {
+    var box = container(); if (!box) return;
+    var rk = roomKey();
+    var items = rk ? mine().filter(function (i) { return i.room_key === rk; }) : [];
+    var present = {};
+    Array.prototype.forEach.call(box.querySelectorAll(".ff-pending"), function (el) {
+      var id = el.getAttribute("data-ff-outbox");
+      var it = items.filter(function (x) { return x.id === id; })[0];
+      if (!it) { el.remove(); return; }
+      present[id] = true;
+      var st = el.querySelector(".ff-pending-status"), txt = statusText(it);
+      if (st.textContent !== txt) st.textContent = txt;
+      el.classList.toggle("is-failed", it.status === "failed");
+      var act = el.querySelector(".ff-pending-actions"); if (act) act.hidden = it.status !== "failed";
+    });
+    var added = false;
+    items.forEach(function (it) {
+      if (present[it.id]) return;
+      var d = document.createElement("div");
+      d.className = "chat-bubble me ff-pending"; d.setAttribute("data-ff-outbox", it.id);
+      var t = document.createElement("div"); t.className = "ff-pending-text"; t.textContent = label(it.body);
+      var s = document.createElement("div"); s.className = "ff-pending-status"; s.textContent = statusText(it);
+      var a = document.createElement("div"); a.className = "ff-pending-actions"; a.hidden = it.status !== "failed";
+      var r = document.createElement("button"); r.type = "button"; r.setAttribute("data-ff-act", "retry"); r.textContent = "Retry";
+      var c = document.createElement("button"); c.type = "button"; c.setAttribute("data-ff-act", "cancel"); c.textContent = "Delete";
+      a.appendChild(r); a.appendChild(c);
+      d.appendChild(t); d.appendChild(s); d.appendChild(a);
+      box.appendChild(d); added = true;
+    });
+    if (added) { try { box.scrollTop = box.scrollHeight; } catch (e) {} }
+  }
+  document.addEventListener("click", function (e) {   /* one delegated listener */
+    var b = e.target && e.target.closest && e.target.closest(".ff-pending [data-ff-act]"); if (!b) return;
+    var el = b.closest(".ff-pending"), id = el && el.getAttribute("data-ff-outbox"); if (!id) return;
+    if (b.getAttribute("data-ff-act") === "cancel") { delItem(id).then(refreshCache); return; }
+    var it = cache.filter(function (x) { return x.id === id; })[0];
+    if (it) { it.status = "pending"; it.attempts = 0; putItem(it).then(function () { return refreshCache(); }).then(function () { flush(); }); }
+  });
+
+  /* ---------- sending ---------- */
+  async function alreadyOnServer(c, it) {
+    /* Only used when the table rejected a client-made id, so a retry could otherwise duplicate. */
+    try {
+      var since = new Date(new Date(it.createdAt).getTime() - 60000).toISOString();
+      var r = await c.from("chat_messages").select("id").eq("room_key", it.room_key).eq("sender_email", it.sender_email).eq("body", it.body).gte("created_at", since).limit(1);
+      return !!(r && !r.error && r.data && r.data.length);
+    } catch (e) { return false; }
+  }
+  /* returns "sent" | "network" | "auth" | "failed" */
+  async function sendOne(c, it) {
+    var sess;
+    try { sess = await c.auth.getSession(); } catch (e) { return netErr(e) ? "network" : "auth"; }
+    var s = sess && sess.data && sess.data.session;
+    if (!s || !s.user || !s.user.id) return isOffline() ? "network" : "auth";
+    if (it.maybeSent && (it.noId || it.viaOrig) && await alreadyOnServer(c, it)) return "sent";   /* a try with unknown outcome may already be stored */
+    var row = { room_key: it.room_key, sender_email: it.sender_email, sender_name: it.sender_name, body: it.body, sender_user_id: s.user.id, recipient_user_id: it.recipient_user_id, is_general: it.is_general };
+    if (!it.noId) row.id = it.id;
+    var r;
+    try { r = await c.from("chat_messages").insert(row).select("id").single(); }
+    catch (e) { it.maybeSent = true; try { await putItem(it); } catch (x) {} return netErr(e) ? "network" : "failed"; }
+    if (!r.error) return "sent";
+    var er = r.error, code = String(er.code || ""), msg = String(er.message || "");
+    if (code === "23505" && !it.noId) return "sent";                 /* same id already stored = a previous try arrived */
+    if (!it.noId && (code === "22P02" || /invalid input syntax/i.test(msg))) { it.noId = true; it.maybeSent = false; await putItem(it); return sendOne(c, it); }
+    if (netErr(er)) { it.maybeSent = true; try { await putItem(it); } catch (x) {} return "network"; }
+    if (/jwt|token|auth/i.test(msg) || code === "PGRST301") return "auth";
+    return "failed";
+  }
+  function scheduleRetry() {
+    clearTimeout(retryTimer); retryTimer = null;
+    if (!mine().length && !cache.some(function (i) { return i.status !== "failed"; })) return;
+    if (!cache.some(function (i) { return i.status !== "failed"; })) return;
+    var wait = Math.min(5000 * Math.pow(2, retryStep), 120000); retryStep = Math.min(retryStep + 1, 6);
+    retryTimer = setTimeout(function () { retryTimer = null; flush(); }, wait);
+  }
+  async function flushInner() {
+    var c = sb(); if (!c || !hasAccount() || isOffline()) return;
+    var me = owner(); if (!me) return;
+    var list = (await refreshCache()).filter(function (i) { return i.owner === me && i.status !== "failed"; });
+    if (!list.length) { retryStep = 0; return; }
+    var sent = 0, touchedRooms = {};
+    flushing = true; paint();
+    for (var k = 0; k < list.length; k++) {
+      var it = list[k], res = await sendOne(c, it);
+      if (res === "sent") { await delItem(it.id); sent++; touchedRooms[it.room_key] = true; await refreshCache(); continue; }
+      if (res === "network") break;                       /* keep the rest in order, retry later */
+      if (res === "auth") break;                          /* not signed in right now: keep pending */
+      it.attempts = (it.attempts || 0) + 1; it.maybeSent = true;
+      if (it.attempts >= MAX_ATTEMPTS) it.status = "failed";
+      await putItem(it); await refreshCache();
+    }
+    flushing = false; paint();
+    if (sent) {
+      retryStep = 0; flash("sent " + sent);
+      if (touchedRooms[roomKey()] && typeof window.loadSupabaseChatMessages === "function") { try { await window.loadSupabaseChatMessages(); } catch (e) {} }
+    }
+  }
+  function flush() {
+    if (flushing) return Promise.resolve();
+    var run = function () { return flushInner().catch(function (e) { console.warn("Outbox sync failed:", e); }).then(function () { flushing = false; paint(); scheduleRetry(); }); };
+    if (navigator.locks && navigator.locks.request) {      /* only one tab syncs at a time */
+      return navigator.locks.request("eternal-outbox-flush", { ifAvailable: true }, function (lock) { return lock ? run() : null; });
+    }
+    return run();
+  }
+
+  /* ---------- wrap the existing sender ---------- */
+  var origDeliver = window.deliverChatMessage;
+  if (typeof origDeliver === "function" && !origDeliver.__ffHybrid) {
+    var wrapped = async function (text) {
+      var queueable = hasAccount() && !!sb() && !!roomKey() && !!owner();
+      var general = false, recipient = null;
+      try { general = !!(selectedFFChatUser && selectedFFChatUser.isGeneral); recipient = general ? null : ((selectedFFChatUser && selectedFFChatUser.user_id) || null); } catch (e) { queueable = false; }
+      if (queueable && !general && !recipient) queueable = false;
+      var enqueue = async function (maybeSent) {
+        var it = { id: uuid(), owner: owner(), room_key: roomKey(), body: String(text), sender_email: owner(), sender_name: (typeof getChatSenderName === "function" ? getChatSenderName() : ""), is_general: general, recipient_user_id: recipient, createdAt: new Date().toISOString(), status: "pending", attempts: 0, maybeSent: !!maybeSent, viaOrig: !!maybeSent };
+        try { await putItem(it); } catch (e) { console.warn("Could not store the message offline:", e); return false; }
+        await refreshCache();
+        var st = document.getElementById("chatHeaderStatus"); if (st && isOffline()) st.textContent = "Offline · message will send when online";
+        return true;
+      };
+      if (queueable && isOffline()) { if (await enqueue(false)) return true; }
+      var ok = await origDeliver.apply(this, arguments);
+      if (ok || !queueable) return ok;
+      /* The existing sender failed. Distinguish "no connection" from a real server rejection. */
+      var reachable = true;
+      if (isOffline()) reachable = false;
+      else {
+        try {
+          var base = (sb() && (sb().supabaseUrl || sb().restUrl)) || "";
+          if (base) { var ctl = new AbortController(), tm = setTimeout(function () { ctl.abort(); }, 4000); await fetch(String(base).replace(/\/+$/, "") + "/auth/v1/health", { method: "GET", cache: "no-store", signal: ctl.signal }).finally(function () { clearTimeout(tm); }); }
+        } catch (e) { reachable = false; }
+      }
+      if (!reachable && await enqueue(true)) return true;
+      return ok;
+    };
+    wrapped.__ffHybrid = true;
+    window.deliverChatMessage = wrapped;
+  }
+
+  /* keep pending bubbles after the conversation is re-rendered */
+  var origRender = window.renderChatMessages;
+  if (typeof origRender === "function" && !origRender.__ffHybrid) {
+    var wr = function () { var r = origRender.apply(this, arguments); try { renderPending(); } catch (e) {} return r; };
+    wr.__ffHybrid = true; window.renderChatMessages = wr;
+  }
+
+  /* ---------- connectivity events (no page reload) ---------- */
+  function catchUp() {
+    /* Supabase realtime reconnects by itself; also re-join the app's chat channel if it dropped and fetch what was missed. */
+    try {
+      var ch = (typeof supabaseChatChannel !== "undefined" && supabaseChatChannel) || null;
+      if (ch && ch.state && ch.state !== "joined" && ch.state !== "joining" && typeof subscribeSupabaseChat === "function") subscribeSupabaseChat();
+    } catch (e) {}
+    try { if (typeof window.loadSupabaseChatMessages === "function" && hasAccount() && sb()) window.loadSupabaseChatMessages(); } catch (e) {}
+    try { if (typeof window.ffEnsurePushSubscription === "function") window.ffEnsurePushSubscription(); } catch (e) {}
+  }
+  window.addEventListener("online", function () { retryStep = 0; paint(); flush().then(catchUp); });
+  window.addEventListener("offline", function () { paint(); });
+  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible" && !isOffline() && cache.length) flush(); });
+  if (navigator.serviceWorker) navigator.serviceWorker.addEventListener("message", function (e) { var d = e.data || {}; if (d.type === "ETERNAL_PUSH_RECEIVED" && typeof window.loadSupabaseChatMessages === "function") { try { window.loadSupabaseChatMessages(); } catch (x) {} } });
+
+  /* start: load anything left from a previous session, then sync as soon as the user is signed in */
+  function boot() { ensurePill(); refreshCache().then(function () { if (cache.length) { if (!isOffline()) flush(); else scheduleRetry(); } }); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, { once: true }); else boot();
+  window.ffOutboxFlush = flush;   /* manual hook for debugging */
 })();
 </script>
 </body>

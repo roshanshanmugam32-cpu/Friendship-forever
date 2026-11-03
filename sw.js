@@ -9,9 +9,18 @@
  *   (ETERNAL_NAVIGATE) instead of force-reloading it.
  */
 const CACHE_PREFIX = "eternal-shell-";
-const CACHE_NAME = CACHE_PREFIX + "v3";
+const CACHE_NAME = CACHE_PREFIX + "v4";
+const CDN_PREFIX = "eternal-cdn-";
+const CDN_CACHE = CDN_PREFIX + "v1";
+/* Public, non-personal third-party files the app needs to start offline (script + fonts). */
+const CDN_HOSTS = ["cdn.jsdelivr.net", "fonts.googleapis.com", "fonts.gstatic.com"];
 const SHELL_URL = "./";
 const NAV_TIMEOUT_MS = 4000;
+const CDN_WARM = [
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2",
+  "https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap",
+  "https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Caveat:wght@500;600&display=swap"
+];
 const PRECACHE = [SHELL_URL, "./manifest.json", "./logo.png", "./eternal-icon-192.png", "./eternal-icon-512.png"];
 
 self.addEventListener("install", (event) => {
@@ -22,6 +31,8 @@ self.addEventListener("install", (event) => {
       const response = await fetch(path, { cache: "reload" });
       if (response.status === 200 && response.type === "basic") await cache.put(path, response);
     }));
+    // Warm the third-party files too (best effort) so offline works right after the first visit.
+    await Promise.allSettled(CDN_WARM.map((u) => cdnFetchAndStore(u)));
     await self.skipWaiting();
   })());
 });
@@ -30,7 +41,7 @@ self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
     await Promise.all(
-      names.filter((n) => n.startsWith(CACHE_PREFIX) && n !== CACHE_NAME).map((n) => caches.delete(n))
+      names.filter((n) => (n.startsWith(CACHE_PREFIX) && n !== CACHE_NAME) || (n.startsWith(CDN_PREFIX) && n !== CDN_CACHE)).map((n) => caches.delete(n))
     );
     await self.clients.claim();
   })());
@@ -48,7 +59,7 @@ self.addEventListener("push", (event) => {
     body: data.body || "You have a new notification.",
     icon: data.icon || "./eternal-icon-192.png",
     badge: data.badge || "./eternal-icon-192.png",
-    tag: data.tag || "eternal-notification",
+    tag: data.tag || (data.eventKey ? "ev-" + data.eventKey : "eternal-notification"),
     renotify: data.renotify === true,
     data: {
       url: typeof data.url === "string" ? data.url : "./",
@@ -58,7 +69,16 @@ self.addEventListener("push", (event) => {
     vibrate: [200, 100, 200],
     timestamp: Date.now()
   };
-  event.waitUntil(self.registration.showNotification(data.title || "Eternal", options));
+  event.waitUntil((async () => {
+    // If the app is open and focused the user already sees the update (realtime), so skip the duplicate OS notification.
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const watching = windows.find((c) => c.visibilityState === "visible" && c.focused);
+    if (watching) {
+      watching.postMessage({ type: "ETERNAL_PUSH_RECEIVED", eventKey: options.data.eventKey, kind: options.data.type });
+      return;
+    }
+    await self.registration.showNotification(data.title || "Eternal", options);
+  })());
 });
 
 self.addEventListener("notificationclick", (event) => {
@@ -95,6 +115,8 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 async function putSafely(cacheKey, response) {
   // Only complete, successful, same-origin responses; a failed put must never break the page.
   if (response.status !== 200 || response.type !== "basic") return;
+  const cc = response.headers && response.headers.get ? (response.headers.get("Cache-Control") || "") : "";
+  if (/no-store|private/i.test(cc)) return; // never keep responses the server marked as private
   try {
     const cache = await caches.open(CACHE_NAME);
     await cache.put(cacheKey, response);
@@ -111,6 +133,16 @@ function keepAlive(event, promise) {
   }
 }
 
+async function cdnFetchAndStore(url) {
+  // CORS-mode fetch so the status is readable (no opaque error responses get cached).
+  const response = await fetch(new Request(url, { mode: "cors", credentials: "omit" }));
+  if (response.status === 200) {
+    const cache = await caches.open(CDN_CACHE);
+    await cache.put(url, response.clone());
+  }
+  return response;
+}
+
 const PRIVATE_PATH = /\/(api|auth|login|logout|token|graphql|rest|storage|realtime)(\/|$)/i;
 const STATIC_FILE = /\.(?:css|js|mjs|png|jpe?g|webp|gif|svg|ico|woff2?|ttf|otf)$/i;
 
@@ -125,7 +157,19 @@ self.addEventListener("fetch", (event) => {
   } catch {
     return;
   }
-  if (url.origin !== self.location.origin) return;
+  if (url.origin !== self.location.origin) {
+    // Only public CDN/font files are handled; Supabase, Google sign-in etc. always go straight to the network.
+    if (url.protocol !== "https:" || !CDN_HOSTS.includes(url.hostname)) return;
+    event.respondWith((async () => {
+      const cache = await caches.open(CDN_CACHE);
+      const cached = await cache.match(request.url);
+      const refresh = cdnFetchAndStore(request.url).catch(() => null);
+      if (cached) { keepAlive(event, refresh); return cached; }
+      const fresh = await refresh;
+      return fresh || Response.error();
+    })());
+    return;
+  }
   if (PRIVATE_PATH.test(url.pathname)) return;
 
   if (request.mode === "navigate") {
